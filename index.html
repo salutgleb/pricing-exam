@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Ценообразование · экзамен 26.10</title>
+<style>
+:root{--bg:#f5f3ed;--paper:#fffefa;--ink:#282724;--muted:#696963;--line:#deddd5;--accent:#d34b28;--purple:#7454aa}
+@media (prefers-color-scheme:dark){:root{--bg:#1d1c1a;--paper:#262522;--ink:#ecebe6;--muted:#a6a59e;--line:#3a3935;--accent:#f0714d;--purple:#a58bd6}}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--ink);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:16px}
+main{width:100%;max-width:440px;background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:28px}
+.eyebrow{margin:0 0 6px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-weight:700}
+h1{font-size:26px;letter-spacing:-1px;margin:0 0 8px}
+p{margin:0 0 14px}
+.muted{color:var(--muted)}
+.small{font-size:13px}
+label{display:block;font-weight:600;margin:18px 0 6px}
+input{width:100%;font:inherit;padding:11px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+input:focus-visible,button:focus-visible{outline:3px solid var(--purple);outline-offset:2px}
+button{width:100%;margin-top:12px;font:inherit;font-weight:700;padding:11px 12px;border:0;border-radius:8px;background:var(--accent);color:#fff;cursor:pointer}
+button:disabled{opacity:.6;cursor:progress}
+.msg{min-height:1.6em;margin:12px 0 4px;font-weight:600}
+</style>
+</head>
+<body>
+<main>
+<p class="eyebrow">ВШБ · подготовка к экзамену</p>
+<h1>Ценообразование · экзамен 26.10</h1>
+<p class="muted">Тест по пяти вариантам, последовательности, формулы, задачи и кейс. Открывайте в Safari или Chrome, не внутри Telegram.</p>
+<form id="form">
+<label for="password">Пароль</label>
+<input id="password" type="password" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false" required>
+<button id="submit" type="submit">Открыть</button>
+</form>
+<p id="message" class="msg" role="status" aria-live="polite"></p>
+<p class="small muted">Пароль запоминается на этом устройстве. Если ссылка открылась внутри Telegram, нажми «Открыть в браузере».</p>
+</main>
+<script>
+'use strict';
+const BASE = '/pricing-exam/';
+const VIRTUAL = BASE + 'v/';
+const $ = (id) => document.getElementById(id);
+const say = (text) => { $('message').textContent = text; };
+const fromHex = (text) => new Uint8Array(text.match(/../g).map((byte) => parseInt(byte, 16)));
+
+function openDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('private-site:' + BASE, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('keys');
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function storeRequest(mode, action) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const request = action(db.transaction('keys', mode).objectStore('keys'));
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function nextPath() {
+  const fromPath = location.pathname.startsWith(VIRTUAL) ? location.pathname.slice(VIRTUAL.length) + location.search + location.hash : '';
+  const next = fromPath || new URLSearchParams(location.search).get('next') || '';
+  return next.startsWith('/') || next.includes('..') || next.includes('//') ? '' : next;
+}
+
+async function derive(password, gate, extractable) {
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: fromHex(gate.salt), iterations: gate.iterations, hash: 'SHA-256' },
+    base, { name: 'AES-GCM', length: 256 }, extractable, ['decrypt'],
+  );
+}
+
+async function verify(key, gate) {
+  const encrypted = await (await fetch(BASE + 'm.zip', { cache: 'no-cache' })).arrayBuffer();
+  const iv = new Uint8Array(12);
+  iv.set(fromHex(gate.manifest.nonce));
+  const firstChunk = encrypted.slice(0, Math.min(gate.chunk, gate.manifest.size) + 16);
+  await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, firstChunk);
+}
+
+async function rememberKey(key, password, gate) {
+  try {
+    await storeRequest('readwrite', (store) => store.put(key, 'key'));
+  } catch (error) {
+    const raw = await crypto.subtle.exportKey('raw', await derive(password, gate, true));
+    await storeRequest('readwrite', (store) => store.put({ raw }, 'key'));
+  }
+}
+
+function activated(worker) {
+  if (!worker || worker.state === 'activated') return Promise.resolve();
+  return new Promise((resolve) => {
+    worker.addEventListener('statechange', () => { if (worker.state === 'activated') resolve(); });
+  });
+}
+
+async function enter() {
+  const registration = await navigator.serviceWorker.register(BASE + 'sw.js', { scope: BASE, updateViaCache: 'none' });
+  await registration.update().catch(() => {});
+  await activated(registration.installing || registration.waiting);
+  await navigator.serviceWorker.ready;
+  if (registration.active) registration.active.postMessage('reset');
+  location.replace(VIRTUAL + nextPath());
+}
+
+async function onSubmit(event) {
+  event.preventDefault();
+  const password = $('password').value.trim();
+  $('submit').disabled = true;
+  say('Проверяю пароль…');
+  try {
+    const gate = await (await fetch(BASE + 'gate.json', { cache: 'no-cache' })).json();
+    const key = await derive(password, gate, false);
+    try {
+      await verify(key, gate);
+    } catch (error) {
+      say('Пароль не подошёл.');
+      $('submit').disabled = false;
+      return;
+    }
+    await rememberKey(key, password, gate);
+    say('Открываю атлас…');
+    await enter();
+  } catch (error) {
+    say('Не получилось открыть: ' + error.message);
+    $('submit').disabled = false;
+  }
+}
+
+async function start() {
+  if (!('serviceWorker' in navigator) || !window.crypto || !crypto.subtle || !window.indexedDB) {
+    say('Этот браузер не умеет открывать атлас. Открой ссылку в Safari или Chrome.');
+    $('submit').disabled = true;
+    return;
+  }
+  $('form').addEventListener('submit', onSubmit);
+  try {
+    const stored = await storeRequest('readonly', (store) => store.get('key'));
+    if (stored) {
+      say('Открываю атлас…');
+      await enter();
+    }
+  } catch (error) {
+    say('');
+  }
+}
+
+start();
+</script>
+</body>
+</html>
